@@ -185,3 +185,10 @@ package-lock.json
 
 MIT — see [LICENSE](LICENSE). This fixture is part of the MIT-licensed
 [xCloud app-compatibility suite](https://github.com/xCloudNobin/app-compatibility).
+### PostgreSQL connection acceptance branch
+
+This branch also accepts a server-only `DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE`.
+When it is set, all task/project data and readiness probes use PostgreSQL; with no URL the SQLite default is unchanged.
+The database role needs ownership of its application database. Schema and demo seed initialization are idempotent.
+`TEST_DATABASE_URL` enables the PostgreSQL integration test. `/api/meta` and `/api/health/ready` identify the engine without exposing credentials.
+Data lives in PostgreSQL's persistent volume and survives Node restart/redeploy. This branch exists for xCloud connection acceptance; it does not alter the fixture's main branch.

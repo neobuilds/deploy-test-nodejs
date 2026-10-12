@@ -208,12 +208,12 @@ const TASK_SELECT = `SELECT t.id, t.project_id, p.name AS project_name, t.title,
                             t.status, t.priority, t.created_at, t.updated_at
                        FROM task t JOIN project p ON p.id = t.project_id`;
 
-function getProject(db, id) {
-  return db.prepare(`${PROJECT_SELECT} WHERE id = ?`).get(id) || null;
+async function getProject(db, id) {
+  return await db.prepare(`${PROJECT_SELECT} WHERE id = ?`).get(id) || null;
 }
 
-function getTask(db, id) {
-  return db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id) || null;
+async function getTask(db, id) {
+  return await db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id) || null;
 }
 
 function requireDb(db) {
@@ -350,27 +350,27 @@ export function createRequestListener({ config, db }) {
   ].map((r) => ({ ...r, segments: r.path.split("/").filter((s) => s !== "") }));
 
   const handlers = {
-    "GET /api/health/live": (_req, res) =>
+    "GET /api/health/live": async (_req, res) =>
       sendJson(res, 200, { status: "alive", timestamp: new Date().toISOString() }),
 
-    "GET /api/health/ready": (_req, res) => {
-      const probe = probeDb(config.dbPath);
-      if (probe.ok) return sendJson(res, 200, { status: "ready", db: "sqlite", checked_at: probe.detail || null });
-      return sendJson(res, 503, { status: "unavailable", db: "sqlite", detail: probe.detail });
+    "GET /api/health/ready": async (_req, res) => {
+      const probe = config.databaseUrl ? (db ? await db.probe() : { ok: false, detail: "PostgreSQL unavailable" }) : probeDb(config.dbPath);
+      if (probe.ok) return sendJson(res, 200, { status: "ready", db: config.databaseUrl ? "postgresql" : "sqlite", checked_at: probe.detail || null });
+      return sendJson(res, 503, { status: "unavailable", db: config.databaseUrl ? "postgresql" : "sqlite", detail: probe.detail });
     },
 
-    "GET /api/meta": (_req, res) =>
+    "GET /api/meta": async (_req, res) =>
       sendJson(res, 200, {
         name: "deploy-test-nodejs",
         description: "Native Node.js taskboard: node:http + better-sqlite3, validated CRUD, search/filter.",
         release: config.buildMarker,
         runtime: { name: "node", version: process.version },
-        database: { engine: "sqlite", path: config.dbPath },
+        database: config.databaseUrl ? { engine: "postgresql" } : { engine: "sqlite", path: config.dbPath },
       }),
 
-    "GET /api/projects": (_req, res) => {
+    "GET /api/projects": async (_req, res) => {
       const d = requireDb(db);
-      const rows = d
+      const rows = await d
         .prepare(
           `SELECT p.id, p.name, p.description, p.status, p.created_at, p.updated_at,
                   COUNT(t.id) AS task_total,
@@ -395,25 +395,25 @@ export function createRequestListener({ config, db }) {
     "POST /api/projects": async (req, res) => {
       const d = requireDb(db);
       const input = validateProjectInput(await readJsonObject(req));
-      const result = d
+      const result = await d
         .prepare("INSERT INTO project (name, description, status) VALUES (?, ?, ?)")
         .run(input.name, input.description, input.status);
-      return sendJson(res, 201, { project: getProject(d, Number(result.lastInsertRowid)) });
+      return sendJson(res, 201, { project: await getProject(d, Number(result.lastInsertRowid)) });
     },
 
-    "GET /api/projects/:id": (_req, res, params) => {
+    "GET /api/projects/:id": async (_req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const project = getProject(d, id);
+      const project = await getProject(d, id);
       if (!project) return sendJson(res, 404, { error: "Project not found" });
-      const tasks = d.prepare("SELECT * FROM task WHERE project_id = ? ORDER BY id DESC").all(id);
+      const tasks = await d.prepare("SELECT * FROM task WHERE project_id = ? ORDER BY id DESC").all(id);
       return sendJson(res, 200, { project, tasks });
     },
 
     "PATCH /api/projects/:id": async (req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const current = getProject(d, id);
+      const current = await getProject(d, id);
       if (!current) return sendJson(res, 404, { error: "Project not found" });
       const body = await readJsonObject(req);
       if (body.name === undefined && body.description === undefined && body.status === undefined) {
@@ -425,21 +425,21 @@ export function createRequestListener({ config, db }) {
         status: body.status ?? current.status,
       };
       const input = validateProjectInput(merged);
-      d.prepare(
+      await d.prepare(
         "UPDATE project SET name = ?, description = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
       ).run(input.name, input.description, input.status, id);
-      return sendJson(res, 200, { project: getProject(d, id) });
+      return sendJson(res, 200, { project: await getProject(d, id) });
     },
 
-    "DELETE /api/projects/:id": (_req, res, params) => {
+    "DELETE /api/projects/:id": async (_req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const result = d.prepare("DELETE FROM project WHERE id = ?").run(id);
+      const result = await d.prepare("DELETE FROM project WHERE id = ?").run(id);
       if (Number(result.changes) === 0) return sendJson(res, 404, { error: "Project not found" });
       res.writeHead(204).end();
     },
 
-    "GET /api/tasks": (_req, res, params, query) => {
+    "GET /api/tasks": async (_req, res, params, query) => {
       const d = requireDb(db);
       const q = (query.get("q") || "").trim();
       const statusParam = (query.get("status") || "").trim() || null;
@@ -456,7 +456,7 @@ export function createRequestListener({ config, db }) {
 
       const like = q ? `%${escapeLike(q)}%` : null;
 
-      const tasks = d
+      const tasks = await d
         .prepare(
           `SELECT t.id, t.project_id, p.name AS project_name, t.title, t.description,
                   t.status, t.priority, t.created_at, t.updated_at
@@ -480,21 +480,21 @@ export function createRequestListener({ config, db }) {
       const d = requireDb(db);
       const body = await readJsonObject(req);
       const input = validateTaskInput(body, true);
-      if (!getProject(d, input.project_id)) {
+      if (!(await getProject(d, input.project_id))) {
         throw new BadRequestError("project_id does not exist", { project_id: "no project with that id" });
       }
-      const result = d
+      const result = await d
         .prepare(
           "INSERT INTO task (project_id, title, description, status, priority) VALUES (?, ?, ?, ?, ?)",
         )
         .run(input.project_id, input.title, input.description, input.status, input.priority);
-      return sendJson(res, 201, { task: getTask(d, Number(result.lastInsertRowid)) });
+      return sendJson(res, 201, { task: await getTask(d, Number(result.lastInsertRowid)) });
     },
 
-    "GET /api/tasks/:id": (_req, res, params) => {
+    "GET /api/tasks/:id": async (_req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const task = getTask(d, id);
+      const task = await getTask(d, id);
       if (!task) return sendJson(res, 404, { error: "Task not found" });
       return sendJson(res, 200, { task });
     },
@@ -502,7 +502,7 @@ export function createRequestListener({ config, db }) {
     "PATCH /api/tasks/:id": async (req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const current = getTask(d, id);
+      const current = await getTask(d, id);
       if (!current) return sendJson(res, 404, { error: "Task not found" });
       const body = await readJsonObject(req);
       const keys = ["title", "description", "status", "priority", "project_id"];
@@ -512,21 +512,21 @@ export function createRequestListener({ config, db }) {
       const merged = {};
       for (const k of keys) if (body[k] !== undefined) merged[k] = body[k];
       const input = validateTaskInput(merged, false);
-      if (input.project_id && !getProject(d, input.project_id)) {
+      if (input.project_id && !(await getProject(d, input.project_id))) {
         throw new BadRequestError("project_id does not exist", { project_id: "no project with that id" });
       }
       if (!input.project_id) input.project_id = current.project_id;
-      d.prepare(
+      await d.prepare(
         `UPDATE task SET project_id = ?, title = ?, description = ?, status = ?, priority = ?,
                 updated_at = datetime('now') WHERE id = ?`,
       ).run(input.project_id, input.title, input.description, input.status, input.priority, id);
-      return sendJson(res, 200, { task: getTask(d, id) });
+      return sendJson(res, 200, { task: await getTask(d, id) });
     },
 
-    "DELETE /api/tasks/:id": (_req, res, params) => {
+    "DELETE /api/tasks/:id": async (_req, res, params) => {
       const d = requireDb(db);
       const id = parseId(params.id);
-      const result = d.prepare("DELETE FROM task WHERE id = ?").run(id);
+      const result = await d.prepare("DELETE FROM task WHERE id = ?").run(id);
       if (Number(result.changes) === 0) return sendJson(res, 404, { error: "Task not found" });
       res.writeHead(204).end();
     },

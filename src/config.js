@@ -26,5 +26,5 @@ export function defaultConfig(env = process.env) {
     throw new Error(`PORT must be an integer in [0, 65535], got "${env.PORT}"`);
   }
 
-  return { port, bind, dataDir, dbPath, buildMarker };
+  return { port, bind, dataDir, dbPath, buildMarker, databaseUrl: env.DATABASE_URL || null };
 }

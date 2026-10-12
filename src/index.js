@@ -2,12 +2,13 @@ import { createServer } from "node:http";
 import { createRequestListener } from "./app.js";
 import { defaultConfig } from "./config.js";
 import { openDb } from "./db.js";
+import { openPostgres } from "./postgres.js";
 
 const config = defaultConfig();
 
 let db = null;
 try {
-  db = openDb(config.dbPath);
+  db = config.databaseUrl ? await openPostgres(config.databaseUrl) : openDb(config.dbPath);
 } catch (err) {
   console.error(
     `[taskboard] FATAL: could not open database at ${config.dbPath}; ` +
